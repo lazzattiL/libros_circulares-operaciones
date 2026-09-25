@@ -1,4 +1,4 @@
-# Especificación del servicio de gestión de usuarios
+# Especificación del servicio de operaciones
 
 ## Contexto global
 
@@ -32,72 +32,106 @@ No se utilizan bases de datos. La información se almacena únicamente mediante 
 
 No es necesario completar los tests ni agregar comentarios innecesarios.
 
+El servicio consulta gestión de ejemplares mediante `EJEMPLARES_SERVICE_URL` y gestión de personas y comunidades mediante `PERSONAS_SERVICE_URL`. Una consulta necesaria que no responda, no esté configurada o devuelva datos inválidos impide registrar la operación y devuelve 503.
+
+Los identificadores de usuarios y comunidades son enteros positivos. `ejemplarId` es un número positivo finito porque gestión de ejemplares actualmente genera identificadores fraccionarios. Un valor requerido ausente devuelve 400 y uno mal formado devuelve 422.
+
+Antes de la primera operación, el poseedor de un ejemplar es su dueño registrado en gestión de ejemplares y el ejemplar está activo. La primera operación tiene `operacionAsociadaId: null`; `comunidadId` permanece en `null` hasta que se realice un préstamo y luego conserva la última comunidad usada. La operación más reciente se determina por `fechaHora` y, si coincide, por el mayor `id`. Las operaciones de un mismo ejemplar se procesan en orden.
+
+Las solicitudes de préstamo y cesión no contienen la identidad de quien las envía; el servicio valida el estado registrado y los usuarios involucrados, pero no autentica al solicitante.
+
 ## Entidades a implementar
 
-### Clase `EstadoEjemplar`
+### Clase `Operacion`
 
 ```typescript
-export class EstadoEjemplar {
+export class Operacion {
+  id: number;
+  operacionAsociadaId: number | null;
+  tipo: 'prestamo' | 'devolucion' | 'cesion' | 'baja';
   ejemplarId: number;
   poseedorId: number;
   activo: boolean;
+  fechaHora: Date;
+  comunidadId: number | null;
 }
 ```
 
 ## Operaciones / flujos permitidos
 
-### Obtener estado de un ejemplar
+### Obtener datos de operación
 
-* HTTP Request: GET
+* HTTP Request: POST
 
-* Endpoint: `/estadoEjemplar/:ejemplarId`
-
-* Salida:
-
-  * `ejemplarId`
-  * `poseedorId`
-  * `activo`
-
-* Códigos de estado:
-
-  * Operación exitosa: 200
-  * El ejemplar no existe: 404
-  * Datos no procesables: 422
-
-### Obtener estado de todos los ejemplares
-
-* HTTP Request: GET
-
-* Endpoint: `/estadoEjemplar`
-
-* Salida: Todos los `ejemplarId`, `poseedorId`, `activo` registrados
-
-  * ejemplarId
-  * poseedorId
-  * activo
-
-* Códigos de estado:
-
-  * Operación exitosa: 200
-  * El ejemplar no existe: 404
-  * Datos no procesables: 422
-
-### prestamo de ejemplar
-
-* HTTP Request: PATCH
-
-* Endpoint: `/estadoEjemplar/:ejemplarId/prestamo`
+* Endpoint: `/operacion/consulta`
 
 * Cuerpo:
-  
-  * `poseedorActualId`
-  * `nuevoPoseedorId`
+
+  * `ejemplarId`
 
 * Salida:
 
+  * `id`
+  * `operacionAsociadaId`
+  * `tipo`
   * `ejemplarId`
   * `poseedorId`
   * `activo`
+  * `comunidadId`
+
+* Códigos de estado:
+
+  * Operación exitosa: 200
+  * Faltan valores: 400
+  * La operación no existe: 404
+  * Datos no procesables: 422
+
+### Obtener todas las operaciones
+
+* HTTP Request: GET
+
+* Endpoint: `/operacion`
+
+* Salida: todas las operaciones registradas con los campos:
+
+  * `id`
+  * `operacionAsociadaId`
+  * `tipo`
+  * `ejemplarId`
+  * `poseedorId`
+  * `activo`
+  * `comunidadId`
+
+* Códigos de estado:
+
+  * Operación exitosa: 200
+
+### Préstamo de ejemplar
+
+* Descripción:
+
+  Busca la última operación del ejemplar por `fechaHora` (o parte del dueño si no hay operaciones), cambia `poseedorId` a `nuevoPoseedorId` y referencia la operación inmediatamente anterior. El poseedor actual y el nuevo deben existir y pertenecer a `comunidadId`. Guarda el tipo y la fecha y hora de la nueva operación.
+
+* HTTP Request: POST
+
+* Endpoint: `/operacion/prestamo`
+
+* Cuerpo:
+
+  * `ejemplarId`
+  * `nuevoPoseedorId`
+  * `comunidadId`
+
+* Salida:
+
+  * `id`
+  * `operacionAsociadaId`
+  * `tipo`
+  * `ejemplarId`
+  * `poseedorId`
+  * `activo`
+  * `fechaHora`
+  * `comunidadId`
 
 * Códigos de estado:
 
@@ -108,77 +142,126 @@ export class EstadoEjemplar {
   * El poseedor actual no existe: 404
   * El nuevo poseedor ya posee actualmente el libro: 409
   * El nuevo poseedor no existe: 404
-  * El poseedor actual no posee actualmente el ejemplar: 409
+  * La comunidad no existe: 404
+  * Los usuarios no pertenecen a la comunidad: 409
   * El ejemplar está dado de baja: 409
+  * No se pudo consultar otro servicio: 503
 
 ### Devolución de ejemplar
 
-* HTTP Request: PATCH
+* Descripción:
 
-* Endpoint: `/estadoEjemplar/:ejemplarId/devolucion`
+Consulta el dueño actual en gestión de ejemplares y registra una nueva operación con ese usuario como poseedor. Conserva la comunidad de la operación anterior y actualiza la referencia, la fecha y la hora.
+
+* HTTP Request: POST
+
+* Endpoint: `/operacion/devolucion`
+
+* Cuerpo:
+
+  * `ejemplarId`
 
 * Salida:
 
+  * `id`
+  * `operacionAsociadaId`
+  * `tipo`
   * `ejemplarId`
   * `poseedorId`
   * `activo`
+  * `fechaHora`
+  * `comunidadId`
 
 * Códigos de estado:
 
   * Operación exitosa: 200
+  * Faltan valores: 400
   * Datos no procesables: 422
   * El ejemplar no existe: 404
+  * El dueño actual no existe: 404
   * El ejemplar está dado de baja: 409
   * El ejemplar ya se encuentra en poder de su propietario: 409
+  * No se pudo consultar otro servicio: 503
+
+* Interacciones con otros servicios
+
+  * Consultar a gestión de ejemplares el id del duenio del ejemplar
 
 ### Cesión de propiedad de ejemplar
 
+* Descripción:
+
+  Reemplaza el dueño en gestión de ejemplares por `nuevoDuenioId`, que puede ser cualquier usuario registrado. El poseedor no cambia. Después de confirmar el cambio, registra la operación asociada, la fecha y la hora.
+
 * HTTP Request: POST
 
-* Endpoint: `/estadoEjemplar/:ejemplarId/cesion`
+* Endpoint: `/estadoEjemplar/cesion`
 
 * Cuerpo:
 
-  * `duenioActualId`
+  * `ejemplarId`
   * `nuevoDuenioId`
 
 * Salida:
 
+  * `id`
+  * `operacionAsociadaId`
+  * `tipo`
   * `ejemplarId`
-  * `duenioId`
+  * `poseedorId`
+  * `activo`
+  * `fechaHora`
+  * `comunidadId`
 
 * Códigos de estado:
-  
+
   * Operación exitosa: 200
   * Faltan valores: 400
   * El ejemplar no existe: 404
   * El duenio actual no existe: 404
   * El nuevo duenio no existe: 404
-  * El usuario no es el duenio actual: 409
   * El usuario ya es el duenio: 409
   * El ejemplar está dado de baja: 409
   * Datos no procesables: 422
+  * No se pudo consultar o actualizar otro servicio: 503
 
 * Interacciones con otros servicios
-  * Consultar Gestión de Ejemplares para obtener el duenio actual.
+
   * Consultar Gestión de Usuarios para verificar que el nuevo duenio exista.
   * Solicitar a Gestión de Ejemplares el cambio de duenio.
 
 ### Dar de baja un ejemplar
 
-* HTTP Request: PATCH
+* Descripción:
 
-* Endpoint: `/estadoEjemplar/:ejemplarId/baja`
+  Conserva el poseedor y la comunidad de la última operación, o usa el dueño y `null` si es la primera. Registra una nueva operación con `activo: false`; después no se admite ninguna operación sobre el ejemplar.
+
+* HTTP Request: POST
+
+* Endpoint: `/estadoEjemplar/baja`
+
+* Cuerpo:
+
+  * `ejemplarId`
 
 * Salida:
 
+  * `id`
+  * `operacionAsociadaId`
+  * `tipo`
   * `ejemplarId`
+  * `poseedorId`
   * `activo`
+  * `fechaHora`
+  * `comunidadId`
 
 * Códigos de estado:
-  
+
   * Operación exitosa: 200
+  * Faltan valores: 400
+  * Datos no procesables: 422
   * El ejemplar no existe: 404
   * El ejemplar ya está dado de baja: 409
+  * No se pudo consultar gestión de ejemplares: 503
 
 ## Casos de uso conflictivos
